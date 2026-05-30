@@ -146,7 +146,8 @@ int State::evaluate(
                 }
             }
         }
-    }
+    }2-1
+    
  
     int bonus = 0;
  
