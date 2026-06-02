@@ -11,6 +11,8 @@
 int MiniMax::eval_ctx(
     State *state,
     int depth,
+    int alpha,
+    int beta,
     GameHistory& history,
     int ply,
     SearchContext& ctx,
@@ -69,7 +71,12 @@ int MiniMax::eval_ctx(
 
         // [Hackathon TODO 3-3]
         // search the child one level deeper
-        int val = eval_ctx(next, depth - 1, history, ply + 1, ctx, p);
+        int val;
+        if(same) {
+            val = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p);
+        } else {
+            val = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
+        }
 
         // [Hackathon TODO 3-4]
         // convert raw to the current player's perspective.
@@ -81,6 +88,12 @@ int MiniMax::eval_ctx(
         // update best_score if this child is better.
         if(score > best_score){
             best_score = score;
+        }
+        if(score > alpha){
+            alpha = score;
+        }
+        if(alpha >= beta){
+            break; //prune here
         }
     }
 
@@ -110,6 +123,8 @@ SearchResult MiniMax::search(
     }
 
 
+    int alpha = M_MAX - 10;
+    int beta = P_MAX + 10;
     int best_score = M_MAX - 10;
     int move_index = 0;
     int total_moves = (int)state->legal_actions.size();
@@ -119,20 +134,29 @@ SearchResult MiniMax::search(
          * search this move like TODO 3, but starting from the root */
         State* next = static_cast<State*>(state->next_state(action));
         bool same = next->same_player_as_parent();
-        int val = eval_ctx(next, depth - 1, history, 1, ctx, p);
+        
+        int val;
+        if(same) {
+            val = eval_ctx(next, depth - 1, alpha, beta, history, 1, ctx, p);
+        } else {
+            val = eval_ctx(next, depth - 1, -beta, -alpha, history, 1, ctx, p);
+        }
         int score = same ? val : -val;
         delete next;
 
-            if(score > best_score){
-                // [ Hackathon TODO 4-2 ]
-                // keep this move if it is the best so far
-                best_score = score;
-                result.best_move = action;
+        if(score > best_score){
+            // [ Hackathon TODO 4-2 ]
+            // keep this move if it is the best so far
+            best_score = score;
+            result.best_move = action;
 
-                if(p.report_partial && ctx.on_root_update){
-                   ctx.on_root_update({result.best_move, best_score, depth, move_index + 1, total_moves});
-                }
-            }  
+            if(p.report_partial && ctx.on_root_update){
+               ctx.on_root_update({result.best_move, best_score, depth, move_index + 1, total_moves});
+            }
+        }
+        if(score > alpha){
+            alpha = score;
+        }
         move_index++;
     }
 
