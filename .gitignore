@@ -234,3 +234,4 @@ lightning_logs/
 *.exe
 *.png
 REQUIREMENTS.md
+new_incoming/
