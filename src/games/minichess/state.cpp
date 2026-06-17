@@ -229,10 +229,12 @@ State* State::next_state(const Move& move){
     int p = this->player;
     int opp = 1 - p;
 
+    size_t actual_to_row = to.first % BOARD_H;
+
     int8_t orig_piece = next.board[p][from.first][from.second];
     int8_t moved = orig_piece;
     //promotion for pawn
-    if(moved == 1 && (to.first==BOARD_H-1 || to.first==0)){
+    if(moved == 1 && (actual_to_row == BOARD_H-1 || actual_to_row == 0)){
         moved = 5;
     }
 
@@ -244,17 +246,17 @@ State* State::next_state(const Move& move){
     h ^= zobrist_piece[p][orig_piece][from.first][from.second];
 
     /* XOR out captured piece at destination */
-    int8_t captured = next.board[opp][to.first][to.second];
+    int8_t captured = next.board[opp][actual_to_row][to.second];
     if(captured){
-        h ^= zobrist_piece[opp][captured][to.first][to.second];
-        next.board[opp][to.first][to.second] = 0;
+        h ^= zobrist_piece[opp][captured][actual_to_row][to.second];
+        next.board[opp][actual_to_row][to.second] = 0;
     }
 
     /* XOR in piece at destination */
-    h ^= zobrist_piece[p][moved][to.first][to.second];
+    h ^= zobrist_piece[p][moved][actual_to_row][to.second];
 
     next.board[p][from.first][from.second] = 0;
-    next.board[p][to.first][to.second] = moved;
+    next.board[p][actual_to_row][to.second] = moved;
 
     State* ns = new State(next, opp);
     ns->zobrist_hash = h;

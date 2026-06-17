@@ -2,14 +2,16 @@
 #include "state.hpp"
 #include "minimax.hpp"
 
-static void sort_actions(State* state, std::vector<Move>& actions) {
+static void sort_actions(State *state, std::vector<Move> &actions)
+{
     std::vector<std::pair<int, Move>> scored_moves;
     scored_moves.reserve(actions.size());
 
     int player = state->player;
     int oppn = 1 - player;
 
-    for (const auto& action : actions) {
+    for (const auto &action : actions)
+    {
         int score = 0;
         Point from = action.first;
         Point to = action.second;
@@ -19,12 +21,14 @@ static void sort_actions(State* state, std::vector<Move>& actions) {
         int oppn_piece = state->piece_at(oppn, to.first, to.second);
 
         // MVV-LVA for captures
-        if (oppn_piece > 0) {
+        if (oppn_piece > 0)
+        {
             score += 10000 + (oppn_piece * 100) - self_piece;
         }
 
         // Pawn promotions
-        if (self_piece == 1 && (to.first == 0 || static_cast<int>(to.first) == state->board_h() - 1)) {
+        if (self_piece == 1 && (to.first == 0 || static_cast<int>(to.first) == state->board_h() - 1))
+        {
             score += 9000;
         }
 
@@ -33,15 +37,17 @@ static void sort_actions(State* state, std::vector<Move>& actions) {
         int center_col = state->board_w() / 2;
         int from_dist = std::abs((int)from.first - center_row) + std::abs((int)from.second - center_col);
         int to_dist = std::abs((int)to.first - center_row) + std::abs((int)to.second - center_col);
-        
+
         score += (from_dist - to_dist) * 10;
 
         scored_moves.push_back({score, action});
     }
 
-    for (size_t i = 0; i < scored_moves.size(); i++) {
+    for (size_t i = 0; i < scored_moves.size(); i++)
+    {
         size_t best = i;
-        for (size_t j = i + 1; j < scored_moves.size(); j++) {
+        for (size_t j = i + 1; j < scored_moves.size(); j++)
+        {
             if (scored_moves[j].first > scored_moves[best].first)
                 best = j;
         }
@@ -49,13 +55,93 @@ static void sort_actions(State* state, std::vector<Move>& actions) {
             std::swap(scored_moves[i], scored_moves[best]);
     }
 
-    for (size_t i = 0; i < actions.size(); ++i) {
+    for (size_t i = 0; i < actions.size(); ++i)
+    {
         actions[i] = scored_moves[i].second;
     }
 }
 
+// ================= Quiescence thingy
+int MiniMax::qsearch(
+    State *state,
+    int alpha,
+    int beta,
+    GameHistory &history,
+    int ply,
+    SearchContext &ctx,
+    const MMParams &p,
+    int q_depth)
+{
+    ctx.nodes++;
+    if (ctx.stop)
+        return 0;
 
+    // Hard stop — too deep, just evaluate
+    if (q_depth <= 0)
+        return state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history);
 
+    // Terminal check
+    if (state->legal_actions.empty() && state->game_state == UNKNOWN)
+    {
+        state->get_legal_actions();
+    }
+    if (state->game_state == WIN)
+        return P_MAX - ply;
+    if (state->game_state == DRAW)
+        return 0;
+    if (state->legal_actions.empty())
+        return M_MAX + ply;
+
+    if (p.use_move_ordering)
+    {
+        sort_actions(state, state->legal_actions);
+    }
+
+    // Standing pat — evaluate current position without any capture
+    int stand_pat = state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history);
+
+    // If standing pat already beats beta, prune immediately
+    if (stand_pat >= beta)
+        return stand_pat;
+
+    // Standing pat raises alpha floor
+    if (stand_pat > alpha)
+        alpha = stand_pat;
+
+    // Only look at capture moves
+    for (auto &action : state->legal_actions)
+    {
+        int oppn = 1 - state->player;
+        Point to = action.second;
+        int victim = state->piece_at(oppn, to.first, to.second);
+
+        // Skip non-captures
+        if (victim == 0)
+            continue;
+
+        State *next = static_cast<State *>(state->next_state(action));
+        bool same = next->same_player_as_parent();
+
+        int val;
+        if (same)
+        {
+            val = qsearch(next, alpha, beta, history, ply + 1, ctx, p, q_depth - 1);
+        }
+        else
+        {
+            val = qsearch(next, -beta, -alpha, history, ply + 1, ctx, p, q_depth - 1);
+        }
+        int score = same ? val : -val;
+        delete next;
+
+        if (score >= beta)
+            return score; // beta cutoff
+        if (score > alpha)
+            alpha = score;
+    }
+
+    return alpha;
+}
 /*============================================================
  * MiniMax — eval_ctx
  *
@@ -66,21 +152,24 @@ int MiniMax::eval_ctx(
     int depth,
     int alpha,
     int beta,
-    GameHistory& history,
+    GameHistory &history,
     int ply,
-    SearchContext& ctx,
-    const MMParams& p
-){
+    SearchContext &ctx,
+    const MMParams &p)
+{
     ctx.nodes++;
-    if(ply > ctx.seldepth){
+    if (ply > ctx.seldepth)
+    {
         ctx.seldepth = ply;
     }
-    if(ctx.stop){
+    if (ctx.stop)
+    {
         return 0;
     }
 
     /* === Lazy move generation (sets game_state) === */
-    if(state->legal_actions.empty() && state->game_state == UNKNOWN){
+    if (state->legal_actions.empty() && state->game_state == UNKNOWN)
+    {
         state->get_legal_actions();
     }
 
@@ -89,30 +178,41 @@ int MiniMax::eval_ctx(
     // [ Hackathon TODO 3-1 ]
     // return the score for a winning terminal state
     // Hint: prefer faster wins by using ply.
-    if(state->game_state == WIN){
+    if (state->game_state == WIN)
+    {
         return P_MAX - ply;
     }
 
-    if(state->game_state == DRAW){
+    if (state->game_state == DRAW)
+    {
         return 0;
     }
 
     /* === Repetition check (game-specific) === */
     int rep_score;
-    if(state->check_repetition(history, rep_score)){
+    if (state->check_repetition(history, rep_score))
+    {
         return rep_score;
     }
     history.push(state->hash());
 
-    if(depth <= 0){
+    if (depth <= 0)
+    {
+        if (p.use_quiescence)
+        {
+            // NEW: run qsearch instead of plain evaluate
+            int score = qsearch(state, alpha, beta, history, ply, ctx, p);
+            history.pop(state->hash());
+            return score;
+        }
         int score = state->evaluate(
-            p.use_kp_eval, p.use_eval_mobility, &history
-        ); 
+            p.use_kp_eval, p.use_eval_mobility, &history);
         history.pop(state->hash());
         return score;
     }
 
-    if (p.use_move_ordering) {
+    if (p.use_move_ordering)
+    {
         sort_actions(state, state->legal_actions);
     }
 
@@ -120,47 +220,67 @@ int MiniMax::eval_ctx(
     int best_score = M_MAX;
     bool first_move = true;
 
-    for(auto& action : state->legal_actions){
-        State* next = static_cast<State*>(state->next_state(action));
+    for (auto &action : state->legal_actions)
+    {
+        State *next = static_cast<State *>(state->next_state(action));
         bool same = next->same_player_as_parent();
 
         int score;
-        if (p.use_pvs) {
-            if (first_move) {
+        if (p.use_pvs)
+        {
+            if (first_move)
+            {
                 int val;
-                if (same) {
+                if (same)
+                {
                     val = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p);
-                } else {
+                }
+                else
+                {
                     val = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
                 }
                 score = same ? val : -val;
                 first_move = false;
-            } else {
+            }
+            else
+            {
                 // Null window search
                 int val;
-                if (same) {
+                if (same)
+                {
                     val = eval_ctx(next, depth - 1, alpha, alpha + 1, history, ply + 1, ctx, p);
-                } else {
+                }
+                else
+                {
                     val = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, ply + 1, ctx, p);
                 }
                 score = same ? val : -val;
 
                 // Re-search
-                if (score > alpha && score < beta) {
-                    if (same) {
+                if (score > alpha && score < beta)
+                {
+                    if (same)
+                    {
                         val = eval_ctx(next, depth - 1, score, beta, history, ply + 1, ctx, p);
-                    } else {
+                    }
+                    else
+                    {
                         val = eval_ctx(next, depth - 1, -beta, -score, history, ply + 1, ctx, p);
                     }
                     score = same ? val : -val;
                 }
             }
-        } else {
+        }
+        else
+        {
             // Standard Negamax Alpha-Beta
             int val;
-            if (same) {
+            if (same)
+            {
                 val = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p);
-            } else {
+            }
+            else
+            {
                 val = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
             }
             score = same ? val : -val;
@@ -168,21 +288,23 @@ int MiniMax::eval_ctx(
 
         delete next;
 
-        if(score > best_score){
+        if (score > best_score)
+        {
             best_score = score;
         }
-        if(score > alpha){
+        if (score > alpha)
+        {
             alpha = score;
         }
-        if(alpha >= beta){
-            break; //prune here
+        if (alpha >= beta)
+        {
+            break; // prune here
         }
     }
 
     history.pop(state->hash());
     return best_score;
 }
-
 
 /*============================================================
  * MiniMax — search
@@ -192,20 +314,21 @@ int MiniMax::eval_ctx(
 SearchResult MiniMax::search(
     State *state,
     int depth,
-    GameHistory& history,
-    SearchContext& ctx
-){
+    GameHistory &history,
+    SearchContext &ctx)
+{
     ctx.reset();
     MMParams p = MMParams::from_map(ctx.params);
     SearchResult result;
     result.depth = depth;
 
-    if(!state->legal_actions.size()){
+    if (!state->legal_actions.size())
+    {
         state->get_legal_actions();
     }
 
-
-    if(p.use_move_ordering){
+    if (p.use_move_ordering)
+    {
         sort_actions(state, state->legal_actions);
     }
 
@@ -216,62 +339,85 @@ SearchResult MiniMax::search(
     int total_moves = (int)state->legal_actions.size();
     bool first_move = true;
 
-    for(auto& action : state->legal_actions){
-        State* next = static_cast<State*>(state->next_state(action));
+    for (auto &action : state->legal_actions)
+    {
+        State *next = static_cast<State *>(state->next_state(action));
         bool same = next->same_player_as_parent();
-        
+
         int score;
-        if(p.use_pvs){
-            if(first_move){
+        if (p.use_pvs)
+        {
+            if (first_move)
+            {
                 int val;
-                if(same) {
+                if (same)
+                {
                     val = eval_ctx(next, depth - 1, alpha, beta, history, 1, ctx, p);
-                } else {
+                }
+                else
+                {
                     val = eval_ctx(next, depth - 1, -beta, -alpha, history, 1, ctx, p);
                 }
                 score = same ? val : -val;
                 first_move = false;
-            } else {
+            }
+            else
+            {
                 // Null window search
                 int val;
-                if(same) {
+                if (same)
+                {
                     val = eval_ctx(next, depth - 1, alpha, alpha + 1, history, 1, ctx, p);
-                } else {
+                }
+                else
+                {
                     val = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, 1, ctx, p);
                 }
                 score = same ? val : -val;
 
                 // Re-search
-                if(score > alpha && score < beta){
-                    if(same) {
+                if (score > alpha && score < beta)
+                {
+                    if (same)
+                    {
                         val = eval_ctx(next, depth - 1, score, beta, history, 1, ctx, p);
-                    } else {
+                    }
+                    else
+                    {
                         val = eval_ctx(next, depth - 1, -beta, -score, history, 1, ctx, p);
                     }
                     score = same ? val : -val;
                 }
             }
-        } else {
+        }
+        else
+        {
             // Standard Negamax
             int val;
-            if(same) {
+            if (same)
+            {
                 val = eval_ctx(next, depth - 1, alpha, beta, history, 1, ctx, p);
-            } else {
+            }
+            else
+            {
                 val = eval_ctx(next, depth - 1, -beta, -alpha, history, 1, ctx, p);
             }
             score = same ? val : -val;
         }
         delete next;
 
-        if(score > best_score){
+        if (score > best_score)
+        {
             best_score = score;
             result.best_move = action;
 
-            if(p.report_partial && ctx.on_root_update){
-               ctx.on_root_update({result.best_move, best_score, depth, move_index + 1, total_moves});
+            if (p.report_partial && ctx.on_root_update)
+            {
+                ctx.on_root_update({result.best_move, best_score, depth, move_index + 1, total_moves});
             }
         }
-        if(score > alpha){
+        if (score > alpha)
+        {
             alpha = score;
         }
         move_index++;
@@ -285,28 +431,31 @@ SearchResult MiniMax::search(
     result.pv = {result.best_move};
 
     return result;
-} 
-
+}
 
 /*============================================================
  * MiniMax — default_params / param_defs
  *============================================================*/
-ParamMap MiniMax::default_params(){
+ParamMap MiniMax::default_params()
+{
     return {
         {"UseKPEval", "true"},
         {"UseEvalMobility", "true"},
         {"ReportPartial", "true"},
         {"UsePVS", "true"},
         {"UseMoveOrdering", "true"},
+        {"UseQuiescence", "true"},
     };
 }
 
-std::vector<ParamDef> MiniMax::param_defs(){
+std::vector<ParamDef> MiniMax::param_defs()
+{
     return {
         {"UseKPEval", ParamDef::CHECK, "true"},
         {"UseEvalMobility", ParamDef::CHECK, "true"},
         {"ReportPartial", ParamDef::CHECK, "true"},
         {"UsePVS", ParamDef::CHECK, "true"},
         {"UseMoveOrdering", ParamDef::CHECK, "true"},
+        {"UseQuiescence", ParamDef::CHECK, "true"},
     };
 }
