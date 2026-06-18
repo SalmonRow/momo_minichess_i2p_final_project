@@ -43,10 +43,25 @@ class GameApp(EngineManagerMixin, PromotionMixin, DialogsMixin):
         self._tk_root.withdraw()
 
         pygame.init()
+        pygame.mixer.init()
         pygame.display.set_caption(game_name.capitalize())
 
         self.screen = pygame.display.set_mode((_cfg.WINDOW_W, _cfg.WINDOW_H))
         self.clock = pygame.time.Clock()
+
+        # Load sound assets
+        import os
+        sound_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "sounds")
+        self.sound_move = None
+        self.sound_capture = None
+        self.sound_game_over = None
+        try:
+            self.sound_move = pygame.mixer.Sound(os.path.join(sound_dir, "Move.ogg"))
+            self.sound_capture = pygame.mixer.Sound(os.path.join(sound_dir, "Capture.ogg"))
+            self.sound_game_over = pygame.mixer.Sound(os.path.join(sound_dir, "GenericNotify.ogg"))
+        except pygame.error as e:
+            log.warning(f"Could not load sounds: {e}")
+
 
         # Select game module (state class, move formatter, renderer, labels, colors)
         state_cls, fmt_move, renderer_cls, player_labels, player_colors = (
@@ -487,6 +502,15 @@ class GameApp(EngineManagerMixin, PromotionMixin, DialogsMixin):
         )
 
         mover = self.game_state.player
+        opponent = 1 - mover
+        is_capture = False
+        try:
+            (_, _), (tr, tc) = move
+            actual_tr = tr % _cfg.BOARD_H if tr >= _cfg.BOARD_H else tr
+            is_capture = self.game_state.board[opponent][actual_tr][tc] != _cfg.EMPTY
+        except (TypeError, IndexError, AttributeError, KeyError):
+            pass
+
         prefix = "W" if mover == 0 else "B"
         step = self.game_state.step
         move_str = f"{step}. {prefix}: {self._format_move(move)}"
@@ -516,6 +540,18 @@ class GameApp(EngineManagerMixin, PromotionMixin, DialogsMixin):
 
         with log.timed("check_game_over"):
             result, winner = self.game_state.check_game_over()
+
+        # Play sound effect
+        if result is not None:
+            if self.sound_game_over:
+                self.sound_game_over.play()
+        elif is_capture:
+            if self.sound_capture:
+                self.sound_capture.play()
+        else:
+            if self.sound_move:
+                self.sound_move.play()
+
         if result is not None:
             log.info(f"game over: {result} winner={winner}")
         if result in ("win", "checkmate", "perpetual_check", "stalemate_loss"):
@@ -534,6 +570,7 @@ class GameApp(EngineManagerMixin, PromotionMixin, DialogsMixin):
         if result == "draw":
             self.game_result = "draw"
             return
+
 
         if self.analyze["enabled"] and not self._is_gaming():
             self._start_analysis()  # sends position+go, engine supersedes old search
