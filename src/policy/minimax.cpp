@@ -370,17 +370,100 @@ int MiniMax::eval_ctx(
     Move best_move = Move();
     int alpha_orig = alpha;
     bool first_move = true;
+    int move_count = 0;
 
     for (auto &action : state->legal_actions)
     {
         State *next = static_cast<State *>(state->next_state(action));
         bool same = next->same_player_as_parent();
+        move_count++;
+
+        int oppn = 1 - state->player;
+        Point to = action.second;
+        int victim = state->piece_at(oppn, to.first, to.second);
+        int self_piece = state->piece_at(state->player, action.first.first, action.first.second);
+        bool is_promo = (self_piece == 1 && (to.first == 0 || static_cast<int>(to.first) == state->board_h() - 1));
 
         int score;
-        if (p.use_pvs)
+        bool do_lmr = false;
+
+        if (p.use_lmr && depth >= 3 && move_count > 3 && victim == 0 && !is_promo && action != hash_move && action != killer_moves[0][ply] && action != killer_moves[1][ply]) {
+            do_lmr = true;
+        }
+
+        if (do_lmr) {
+            int reduction = 1;
+            if (depth >= 6) reduction = 2;
+            int reduced_depth = depth - 1 - reduction;
+            if (reduced_depth < 0) reduced_depth = 0;
+
+            int val;
+            if (same) {
+                val = eval_ctx(next, reduced_depth, alpha, alpha + 1, history, ply + 1, ctx, p);
+            } else {
+                val = eval_ctx(next, reduced_depth, -alpha - 1, -alpha, history, ply + 1, ctx, p);
+            }
+            score = same ? val : -val;
+
+            if (score > alpha) {
+                if (same) {
+                    val = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p);
+                } else {
+                    val = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
+                }
+                score = same ? val : -val;
+            }
+        }
+        else
         {
-            if (first_move)
+            if (p.use_pvs)
             {
+                if (first_move)
+                {
+                    int val;
+                    if (same)
+                    {
+                        val = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p);
+                    }
+                    else
+                    {
+                        val = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
+                    }
+                    score = same ? val : -val;
+                    first_move = false;
+                }
+                else
+                {
+                    // Null window search
+                    int val;
+                    if (same)
+                    {
+                        val = eval_ctx(next, depth - 1, alpha, alpha + 1, history, ply + 1, ctx, p);
+                    }
+                    else
+                    {
+                        val = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, ply + 1, ctx, p);
+                    }
+                    score = same ? val : -val;
+
+                    // Re-search
+                    if (score > alpha && score < beta)
+                    {
+                        if (same)
+                        {
+                            val = eval_ctx(next, depth - 1, score, beta, history, ply + 1, ctx, p);
+                        }
+                        else
+                        {
+                            val = eval_ctx(next, depth - 1, -beta, -score, history, ply + 1, ctx, p);
+                        }
+                        score = same ? val : -val;
+                    }
+                }
+            }
+            else
+            {
+                // Standard Negamax Alpha-Beta
                 int val;
                 if (same)
                 {
@@ -391,53 +474,11 @@ int MiniMax::eval_ctx(
                     val = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
                 }
                 score = same ? val : -val;
-                first_move = false;
             }
-            else
-            {
-                // Null window search
-                int val;
-                if (same)
-                {
-                    val = eval_ctx(next, depth - 1, alpha, alpha + 1, history, ply + 1, ctx, p);
-                }
-                else
-                {
-                    val = eval_ctx(next, depth - 1, -alpha - 1, -alpha, history, ply + 1, ctx, p);
-                }
-                score = same ? val : -val;
-
-                // Re-search
-                if (score > alpha && score < beta)
-                {
-                    if (same)
-                    {
-                        val = eval_ctx(next, depth - 1, score, beta, history, ply + 1, ctx, p);
-                    }
-                    else
-                    {
-                        val = eval_ctx(next, depth - 1, -beta, -score, history, ply + 1, ctx, p);
-                    }
-                    score = same ? val : -val;
-                }
-            }
-        }
-        else
-        {
-            // Standard Negamax Alpha-Beta
-            int val;
-            if (same)
-            {
-                val = eval_ctx(next, depth - 1, alpha, beta, history, ply + 1, ctx, p);
-            }
-            else
-            {
-                val = eval_ctx(next, depth - 1, -beta, -alpha, history, ply + 1, ctx, p);
-            }
-            score = same ? val : -val;
         }
 
         delete next;
+        first_move = false;
 
         if (score > best_score)
         {
@@ -648,6 +689,7 @@ ParamMap MiniMax::default_params()
         {"UseTT", "true"},
         {"UseNMP", "true"},
         {"UseKillerMoves", "true"},
+        {"UseLMR", "true"},
     };
 }
 
@@ -663,5 +705,6 @@ std::vector<ParamDef> MiniMax::param_defs()
         {"UseTT", ParamDef::CHECK, "true"},
         {"UseNMP", ParamDef::CHECK, "true"},
         {"UseKillerMoves", ParamDef::CHECK, "true"},
+        {"UseLMR", ParamDef::CHECK, "true"},
     };
 }

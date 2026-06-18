@@ -13,6 +13,7 @@ struct MMParams
     bool use_tt = true;
     bool use_nmp = true;
     bool use_killers = true;
+    bool use_lmr = true;
 
     static MMParams from_map(const ParamMap &m)
     {
@@ -26,6 +27,7 @@ struct MMParams
         p.use_tt = param_bool(m, "UseTT", true);
         p.use_nmp = param_bool(m, "UseNMP", true);
         p.use_killers = param_bool(m, "UseKillerMoves", true);
+        p.use_lmr = param_bool(m, "UseLMR", true);
         return p;
     }
 };
