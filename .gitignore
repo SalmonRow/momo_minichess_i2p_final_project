@@ -235,3 +235,6 @@ lightning_logs/
 *.png
 REQUIREMENTS.md
 new_incoming/
+
+# Manual testing helper
+testing_commands.md

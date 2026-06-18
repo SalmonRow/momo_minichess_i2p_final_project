@@ -1,8 +1,92 @@
 #include <utility>
+#include <vector>
+#include <algorithm>
 #include "state.hpp"
 #include "minimax.hpp"
 
-static void sort_actions(State *state, std::vector<Move> &actions)
+enum TTBound : uint8_t {
+    TT_EXACT = 0,
+    TT_ALPHA = 1,
+    TT_BETA = 2
+};
+
+struct TTEntry {
+    uint64_t hash = 0;
+    int score = 0;
+    int depth = -1;
+    uint8_t bound = 0;
+    Move best_move = Move();
+};
+
+class TranspositionTable {
+private:
+    std::vector<TTEntry> table;
+public:
+    TranspositionTable(size_t size = 1 << 20) : table(size) {}
+
+    void clear() {
+        std::fill(table.begin(), table.end(), TTEntry{0, 0, -1, 0, Move()});
+    }
+
+    TTEntry* lookup(uint64_t hash) {
+        size_t idx = hash & (table.size() - 1);
+        if (table[idx].hash == hash) {
+            return &table[idx];
+        }
+        return nullptr;
+    }
+
+    void store(uint64_t hash, int score, int depth, uint8_t bound, const Move& best_move) {
+        size_t idx = hash & (table.size() - 1);
+        if (table[idx].hash == 0 || depth >= table[idx].depth) {
+            table[idx] = {hash, score, depth, bound, best_move};
+        }
+    }
+};
+
+static TranspositionTable tt;
+
+static Move killer_moves[2][128];
+
+static void clear_killers() {
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 128; j++) {
+            killer_moves[i][j] = Move();
+        }
+    }
+}
+
+inline int score_to_tt(int score, int ply) {
+    if (score > 90000) return score + ply;
+    if (score < -90000) return score - ply;
+    return score;
+}
+
+inline int score_from_tt(int score, int ply) {
+    if (score > 90000) return score - ply;
+    if (score < -90000) return score + ply;
+    return score;
+}
+
+static bool has_major_pieces(State *state) {
+    int p = state->player;
+    for (int r = 0; r < BOARD_H; r++) {
+        for (int c = 0; c < BOARD_W; c++) {
+            int piece = state->piece_at(p, r, c);
+            if (piece > 1 && piece < 6) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void sort_actions(
+    State *state,
+    std::vector<Move> &actions,
+    const Move& hash_move = Move(),
+    const Move& killer1 = Move(),
+    const Move& killer2 = Move())
 {
     std::vector<std::pair<int, Move>> scored_moves;
     scored_moves.reserve(actions.size());
@@ -16,6 +100,12 @@ static void sort_actions(State *state, std::vector<Move> &actions)
         Point from = action.first;
         Point to = action.second;
 
+        // Hash move gets absolute top priority
+        if (action == hash_move)
+        {
+            score += 1000000;
+        }
+
         // Retrieve pieces
         int self_piece = state->piece_at(player, from.first, from.second);
         int oppn_piece = state->piece_at(oppn, to.first, to.second);
@@ -25,11 +115,20 @@ static void sort_actions(State *state, std::vector<Move> &actions)
         {
             score += 10000 + (oppn_piece * 100) - self_piece;
         }
-
         // Pawn promotions
-        if (self_piece == 1 && (to.first == 0 || static_cast<int>(to.first) == state->board_h() - 1))
+        else if (self_piece == 1 && (to.first == 0 || static_cast<int>(to.first) == state->board_h() - 1))
         {
             score += 9000;
+        }
+        // Killer move 1
+        else if (action == killer1)
+        {
+            score += 8000;
+        }
+        // Killer move 2
+        else if (action == killer2)
+        {
+            score += 7000;
         }
 
         // Lightweight center-control / piece advancement heuristic:
@@ -155,7 +254,8 @@ int MiniMax::eval_ctx(
     GameHistory &history,
     int ply,
     SearchContext &ctx,
-    const MMParams &p)
+    const MMParams &p,
+    bool allowed_null)
 {
     ctx.nodes++;
     if (ply > ctx.seldepth)
@@ -194,7 +294,52 @@ int MiniMax::eval_ctx(
     {
         return rep_score;
     }
-    history.push(state->hash());
+
+    // TT Lookup
+    uint64_t hash = state->hash();
+    TTEntry* entry = nullptr;
+    Move hash_move = Move();
+    if (p.use_tt) {
+        entry = tt.lookup(hash);
+        if (entry) {
+            hash_move = entry->best_move;
+            if (entry->depth >= depth) {
+                int tt_score = score_from_tt(entry->score, ply);
+                if (entry->bound == TT_EXACT) {
+                    return tt_score;
+                }
+                if (entry->bound == TT_ALPHA && tt_score <= alpha) {
+                    return tt_score;
+                }
+                if (entry->bound == TT_BETA && tt_score >= beta) {
+                    return tt_score;
+                }
+            }
+        }
+    }
+
+    // NMP (Null Move Pruning)
+    if (p.use_nmp && allowed_null && depth >= 3 && has_major_pieces(state)) {
+        int static_val = state->evaluate(p.use_kp_eval, p.use_eval_mobility, &history);
+        if (static_val >= beta) {
+            State* null_state = static_cast<State*>(state->create_null_state());
+            if (null_state) {
+                int R = 2;
+                int null_depth = depth - 1 - R;
+                if (null_depth < 0) null_depth = 0;
+
+                int val = eval_ctx(null_state, null_depth, -beta, -beta + 1, history, ply + 1, ctx, p, false);
+                int score = -val;
+                delete null_state;
+
+                if (score >= beta) {
+                    return beta; // Prune!
+                }
+            }
+        }
+    }
+
+    history.push(hash);
 
     if (depth <= 0)
     {
@@ -202,22 +347,28 @@ int MiniMax::eval_ctx(
         {
             // NEW: run qsearch instead of plain evaluate
             int score = qsearch(state, alpha, beta, history, ply, ctx, p);
-            history.pop(state->hash());
+            history.pop(hash);
             return score;
         }
         int score = state->evaluate(
             p.use_kp_eval, p.use_eval_mobility, &history);
-        history.pop(state->hash());
+        history.pop(hash);
         return score;
     }
 
     if (p.use_move_ordering)
     {
-        sort_actions(state, state->legal_actions);
+        if (p.use_killers && ply < 128) {
+            sort_actions(state, state->legal_actions, hash_move, killer_moves[0][ply], killer_moves[1][ply]);
+        } else {
+            sort_actions(state, state->legal_actions, hash_move);
+        }
     }
 
     /* === Negamax loop === */
     int best_score = M_MAX;
+    Move best_move = Move();
+    int alpha_orig = alpha;
     bool first_move = true;
 
     for (auto &action : state->legal_actions)
@@ -291,6 +442,7 @@ int MiniMax::eval_ctx(
         if (score > best_score)
         {
             best_score = score;
+            best_move = action;
         }
         if (score > alpha)
         {
@@ -298,11 +450,32 @@ int MiniMax::eval_ctx(
         }
         if (alpha >= beta)
         {
+            if (p.use_killers && ply < 128) {
+                int oppn = 1 - state->player;
+                Point to = action.second;
+                int victim = state->piece_at(oppn, to.first, to.second);
+                if (victim == 0) { // quiet move caused beta cutoff
+                    if (action != killer_moves[0][ply]) {
+                        killer_moves[1][ply] = killer_moves[0][ply];
+                        killer_moves[0][ply] = action;
+                    }
+                }
+            }
             break; // prune here
         }
     }
 
-    history.pop(state->hash());
+    if (p.use_tt && !ctx.stop) {
+        uint8_t bound = TT_EXACT;
+        if (best_score <= alpha_orig) {
+            bound = TT_ALPHA;
+        } else if (best_score >= beta) {
+            bound = TT_BETA;
+        }
+        tt.store(hash, score_to_tt(best_score, ply), depth, bound, best_move);
+    }
+
+    history.pop(hash);
     return best_score;
 }
 
@@ -322,14 +495,33 @@ SearchResult MiniMax::search(
     SearchResult result;
     result.depth = depth;
 
+    // Detect new game or reset to clear the TT and killers
+    if (depth == 1) {
+        static int last_step = -1;
+        if (state->step == 0 || state->step < last_step) {
+            tt.clear();
+            clear_killers();
+        }
+        last_step = state->step;
+    }
+
     if (!state->legal_actions.size())
     {
         state->get_legal_actions();
     }
 
+    uint64_t hash = state->hash();
+    Move hash_move = Move();
+    if (p.use_tt) {
+        TTEntry* entry = tt.lookup(hash);
+        if (entry) {
+            hash_move = entry->best_move;
+        }
+    }
+
     if (p.use_move_ordering)
     {
-        sort_actions(state, state->legal_actions);
+        sort_actions(state, state->legal_actions, hash_move);
     }
 
     int alpha = M_MAX - 10;
@@ -430,6 +622,14 @@ SearchResult MiniMax::search(
     result.seldepth = ctx.seldepth;
     result.pv = {result.best_move};
 
+    if (p.use_tt && !ctx.stop) {
+        uint8_t bound = TT_EXACT;
+        if (best_score <= M_MAX - 10) {
+            bound = TT_ALPHA;
+        }
+        tt.store(hash, score_to_tt(best_score, 0), depth, bound, result.best_move);
+    }
+
     return result;
 }
 
@@ -440,11 +640,14 @@ ParamMap MiniMax::default_params()
 {
     return {
         {"UseKPEval", "true"},
-        {"UseEvalMobility", "true"},
+        {"UseEvalMobility", "false"},
         {"ReportPartial", "true"},
         {"UsePVS", "true"},
         {"UseMoveOrdering", "true"},
         {"UseQuiescence", "true"},
+        {"UseTT", "true"},
+        {"UseNMP", "true"},
+        {"UseKillerMoves", "true"},
     };
 }
 
@@ -452,10 +655,13 @@ std::vector<ParamDef> MiniMax::param_defs()
 {
     return {
         {"UseKPEval", ParamDef::CHECK, "true"},
-        {"UseEvalMobility", ParamDef::CHECK, "true"},
+        {"UseEvalMobility", ParamDef::CHECK, "false"},
         {"ReportPartial", ParamDef::CHECK, "true"},
         {"UsePVS", ParamDef::CHECK, "true"},
         {"UseMoveOrdering", ParamDef::CHECK, "true"},
         {"UseQuiescence", ParamDef::CHECK, "true"},
+        {"UseTT", ParamDef::CHECK, "true"},
+        {"UseNMP", ParamDef::CHECK, "true"},
+        {"UseKillerMoves", ParamDef::CHECK, "true"},
     };
 }

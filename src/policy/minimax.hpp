@@ -5,21 +5,27 @@
 struct MMParams
 {
     bool use_kp_eval = true;
-    bool use_eval_mobility = true;
+    bool use_eval_mobility = false;
     bool report_partial = true;
     bool use_pvs = true;
     bool use_move_ordering = true;
     bool use_quiescence = true;
+    bool use_tt = true;
+    bool use_nmp = true;
+    bool use_killers = true;
 
     static MMParams from_map(const ParamMap &m)
     {
         MMParams p;
         p.use_kp_eval = param_bool(m, "UseKPEval", true);
-        p.use_eval_mobility = param_bool(m, "UseEvalMobility", true);
+        p.use_eval_mobility = param_bool(m, "UseEvalMobility", false);
         p.report_partial = param_bool(m, "ReportPartial", true);
         p.use_pvs = param_bool(m, "UsePVS", true);
         p.use_move_ordering = param_bool(m, "UseMoveOrdering", true);
         p.use_quiescence = param_bool(m, "UseQuiescence", true);
+        p.use_tt = param_bool(m, "UseTT", true);
+        p.use_nmp = param_bool(m, "UseNMP", true);
+        p.use_killers = param_bool(m, "UseKillerMoves", true);
         return p;
     }
 };
@@ -45,7 +51,8 @@ public:
         GameHistory &history,
         int ply,
         SearchContext &ctx,
-        const MMParams &p);
+        const MMParams &p,
+        bool allowed_null = true);
     static SearchResult search(
         State *state,
         int depth,
